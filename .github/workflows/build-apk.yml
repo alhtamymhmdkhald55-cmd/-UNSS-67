@@ -25,12 +25,43 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify project files
+      - name: Prepare project
         run: |
-          test -f package.json
-          test -f capacitor.config.json
-          test -f native/android/install-native.sh
-          test -f resources/sounds/adhan.mp3
+          set -e
+
+          if [ ! -f capacitor.config.json ]; then
+            echo "ERROR: capacitor.config.json missing"
+            find . -maxdepth 3 -type f | head -100
+            exit 1
+          fi
+
+          if [ ! -f www/index.html ]; then
+            echo "ERROR: www/index.html missing"
+            exit 1
+          fi
+
+          if [ ! -f package.json ]; then
+            cat > package.json <<'EOF'
+          {
+            "name": "anis-unss",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "build": "echo Web assets ready"
+            },
+            "dependencies": {
+              "@capacitor/core": "^6.2.0",
+              "@capacitor/android": "^6.2.0",
+              "@capacitor/local-notifications": "^6.0.0"
+            },
+            "devDependencies": {
+              "@capacitor/cli": "^6.2.0"
+            }
+          }
+          EOF
+          fi
+
+          echo "Project files checked"
 
       - name: Install dependencies
         run: npm install
@@ -43,28 +74,48 @@ jobs:
           chmod +x native/android/install-native.sh
           bash native/android/install-native.sh
 
-      - name: Copy app icons and sounds
+      - name: Copy icons and sounds
         run: |
+          set -e
+
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            if [ -d "resources/mipmap-$d" ]; then
-              mkdir -p "android/app/src/main/res/mipmap-$d"
-              cp resources/mipmap-$d/*.png "android/app/src/main/res/mipmap-$d/"
+            mkdir -p "android/app/src/main/res/mipmap-$d"
+            if compgen -G "resources/mipmap-$d/*.png" > /dev/null; then
+              cp resources/mipmap-$d/*.png \
+                "android/app/src/main/res/mipmap-$d/"
             fi
           done
 
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi nodpi; do
-            if [ -d "resources/drawable-$d" ]; then
-              mkdir -p "android/app/src/main/res/drawable-$d"
-              cp resources/drawable-$d/*.png "android/app/src/main/res/drawable-$d/"
+            mkdir -p "android/app/src/main/res/drawable-$d"
+            if compgen -G "resources/drawable-$d/*.png" > /dev/null; then
+              cp resources/drawable-$d/*.png \
+                "android/app/src/main/res/drawable-$d/"
             fi
           done
 
           mkdir -p android/app/src/main/res/raw
-          cp resources/sounds/*.wav android/app/src/main/res/raw/
-          cp resources/sounds/adhan.mp3 android/app/src/main/res/raw/
+
+          for f in resources/sounds/*.wav; do
+            if [ -f "$f" ]; then
+              cp "$f" android/app/src/main/res/raw/
+            fi
+          done
+
+          cp resources/sounds/adhan.mp3 \
+            android/app/src/main/res/raw/adhan.mp3
 
       - name: Sync Android
         run: npx cap sync android
+
+      - name: Verify native Adhan
+        run: |
+          set -e
+          test -f android/app/src/main/java/com/anis/unss/AdhanFullScreenActivity.java
+          test -f android/app/src/main/java/com/anis/unss/AdhanAlarmReceiver.java
+          test -f android/app/src/main/java/com/anis/unss/AdhanBootReceiver.java
+          test -f android/app/src/main/java/com/anis/unss/AdhanOverlayPlugin.java
+          grep -q "USE_FULL_SCREEN_INTENT" android/app/src/main/AndroidManifest.xml
 
       - name: Build APK
         working-directory: android
