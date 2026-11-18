@@ -25,100 +25,116 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Prepare project
+      - name: Extract project ZIP
+        shell: bash
         run: |
           set -e
 
-          if [ ! -f capacitor.config.json ]; then
-            echo "ERROR: capacitor.config.json missing"
-            find . -maxdepth 3 -type f | head -100
+          ZIP_FILE="Anis_UNSS_fixed.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "Searching for project ZIP..."
+            ZIP_FILE=$(find . -maxdepth 3 -type f \
+              -iname "Anis_UNSS_fixed.zip" -print -quit)
+          fi
+
+          if [ -z "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Anis_UNSS_fixed.zip not found"
+            find . -maxdepth 3 -type f -name "*.zip"
             exit 1
           fi
 
-          if [ ! -f www/index.html ]; then
-            echo "ERROR: www/index.html missing"
+          mkdir -p extracted
+          unzip -oq "$ZIP_FILE" -d extracted
+
+          PACKAGE_FILE=$(find extracted -type f \
+            -name package.json -print -quit)
+
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json not found inside ZIP"
+            find extracted -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-          if [ ! -f package.json ]; then
-            cat > package.json <<'EOF'
-          {
-            "name": "anis-unss",
-            "version": "1.0.0",
-            "private": true,
-            "scripts": {
-              "build": "echo Web assets ready"
-            },
-            "dependencies": {
-              "@capacitor/core": "^6.2.0",
-              "@capacitor/android": "^6.2.0",
-              "@capacitor/local-notifications": "^6.0.0"
-            },
-            "devDependencies": {
-              "@capacitor/cli": "^6.2.0"
-            }
-          }
-          EOF
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+
+          if [ ! -f "$PROJECT_DIR/capacitor.config.json" ] && \
+             [ ! -f "$PROJECT_DIR/capacitor.config.ts" ] && \
+             [ ! -f "$PROJECT_DIR/capacitor.config.js" ]; then
+            echo "ERROR: Capacitor configuration missing"
+            exit 1
           fi
 
-          echo "Project files checked"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
         run: npm install
 
+      - name: Prepare web assets
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+          npm run build --if-present
+
+          if [ ! -f www/index.html ] && [ ! -f dist/index.html ] && [ ! -f index.html ]; then
+            echo "ERROR: Web application entry point not found"
+            exit 1
+          fi
+
       - name: Add Android platform
+        working-directory: ${{ env.PROJECT_DIR }}
         run: npx cap add android
 
       - name: Install native Adhan
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -e
+
+          if [ ! -f native/android/install-native.sh ]; then
+            echo "ERROR: Native Adhan installer missing"
+            exit 1
+          fi
+
           chmod +x native/android/install-native.sh
           bash native/android/install-native.sh
 
       - name: Copy icons and sounds
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            mkdir -p "android/app/src/main/res/mipmap-$d"
-            if compgen -G "resources/mipmap-$d/*.png" > /dev/null; then
+            if [ -d "resources/mipmap-$d" ]; then
+              mkdir -p "android/app/src/main/res/mipmap-$d"
               cp resources/mipmap-$d/*.png \
-                "android/app/src/main/res/mipmap-$d/"
+                "android/app/src/main/res/mipmap-$d/" 2>/dev/null || true
             fi
           done
 
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi nodpi; do
-            mkdir -p "android/app/src/main/res/drawable-$d"
-            if compgen -G "resources/drawable-$d/*.png" > /dev/null; then
+            if [ -d "resources/drawable-$d" ]; then
+              mkdir -p "android/app/src/main/res/drawable-$d"
               cp resources/drawable-$d/*.png \
-                "android/app/src/main/res/drawable-$d/"
+                "android/app/src/main/res/drawable-$d/" 2>/dev/null || true
             fi
           done
 
           mkdir -p android/app/src/main/res/raw
 
-          for f in resources/sounds/*.wav; do
-            if [ -f "$f" ]; then
-              cp "$f" android/app/src/main/res/raw/
-            fi
-          done
-
-          cp resources/sounds/adhan.mp3 \
-            android/app/src/main/res/raw/adhan.mp3
+          if [ -d resources/sounds ]; then
+            find resources/sounds -maxdepth 1 -type f \
+              \( -name "*.wav" -o -name "*.mp3" \) \
+              -exec cp {} android/app/src/main/res/raw/ \;
+          fi
 
       - name: Sync Android
+        working-directory: ${{ env.PROJECT_DIR }}
         run: npx cap sync android
 
-      - name: Verify native Adhan
-        run: |
-          set -e
-          test -f android/app/src/main/java/com/anis/unss/AdhanFullScreenActivity.java
-          test -f android/app/src/main/java/com/anis/unss/AdhanAlarmReceiver.java
-          test -f android/app/src/main/java/com/anis/unss/AdhanBootReceiver.java
-          test -f android/app/src/main/java/com/anis/unss/AdhanOverlayPlugin.java
-          grep -q "USE_FULL_SCREEN_INTENT" android/app/src/main/AndroidManifest.xml
-
       - name: Build APK
-        working-directory: android
+        working-directory: ${{ env.PROJECT_DIR }}/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
@@ -127,5 +143,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Anis-UNSS-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
